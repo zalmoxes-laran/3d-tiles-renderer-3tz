@@ -20,11 +20,11 @@ tiles.registerPlugin( plugin );
 
 ## Why
 
-[.3tz](https://github.com/Maxar-Public/3tz-specification) packs a tileset into a single ZIP file. That file ends with an index, so a reader can find any tile without unpacking the archive. It is a community format, not an OGC or Cesium standard, and 3DTilesRendererJS does not include it in its core. This plugin adds it from the outside, in a separate repository, as the 3DTilesRendererJS maintainer suggested ([#722](https://github.com/NASA-AMMOS/3DTilesRendererJS/issues/722), [#1568](https://github.com/NASA-AMMOS/3DTilesRendererJS/pull/1568)).
+[.3tz](https://github.com/Maxar-Public/3tz-specification) packs a tileset into a single ZIP file. That file ends with an index, so a reader can find any tile without unpacking the archive. It is a community format, not an OGC or Cesium standard, and 3DTilesRendererJS does not include it in its core. This plugin adds it from the outside, in a separate repository, as the 3DTilesRendererJS maintainer suggested ([#722](https://github.com/NASA-AMMOS/3DTilesRendererJS/issues/722), [#1568](https://github.com/NASA-AMMOS/3DTilesRendererJS/pull/1568)). When the format was proposed in 2020 ([CesiumGS/3d-tiles#422](https://github.com/CesiumGS/3d-tiles/issues/422)), one of its requirements was a single file, easy to transfer and kind to systems that struggle with many files: that is exactly our need.
 
-We use it in cultural heritage work, where tilesets live in object-storage buckets next to the rest of a project's data. In that setting one tileset as one object is easier to handle than thousands of small files:
+We use it in cultural heritage work, within the StratiGraph project, where tilesets live in the object-storage buckets of the European Collaborative Cloud for Cultural Heritage, next to the rest of a project's data. There a bucket holds fewer than a million objects, and a single photogrammetric survey can count hundreds of thousands of tiles (one of ours, a single temple, has 236,607). One tileset as one object is therefore easier to handle than thousands of small files:
 
-- **Fewer objects.** A bucket that limits the number or type of objects is not filled up by tiles.
+- **Fewer objects.** A survey takes one object in the bucket instead of hundreds of thousands.
 - **One thing to describe.** A single file can carry a checksum, a version and a licence, and can be the subject of statements in a knowledge graph.
 - **Same speed as a folder.** Reading it this way costs the same number of requests as reading the unpacked folder (see *Measurements*).
 
