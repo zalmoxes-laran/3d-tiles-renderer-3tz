@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>.3tz in 3DTilesRendererJS</title>
+	<style>
+		html, body { margin: 0; height: 100%; background: #222; color: #eee; font: 14px sans-serif; }
+		#panel { position: absolute; top: 8px; left: 8px; background: rgba( 0, 0, 0, 0.6 ); padding: 8px 10px; border-radius: 4px; max-width: 420px; }
+		#panel input[type=text] { width: 300px; }
+	</style>
+	<script type="importmap">
+	{
+		"imports": {
+			"three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+			"three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+			"three/": "https://cdn.jsdelivr.net/npm/three@0.170.0/",
+			"3d-tiles-renderer": "https://cdn.jsdelivr.net/npm/3d-tiles-renderer@0.5.3/build/index.js",
+			"3d-tiles-renderer/": "https://cdn.jsdelivr.net/npm/3d-tiles-renderer@0.5.3/"
+		}
+	}
+	</script>
+</head>
+<body>
+	<div id="panel">
+		<div>Open a <b>.3tz</b> from a URL (the server must allow Range requests and CORS) or from your disk.</div>
+		<p><input id="url" type="text" placeholder="https://…/tileset.3tz"> <button id="load">Load</button></p>
+		<p><input id="file" type="file" accept=".3tz"></p>
+		<div id="status"></div>
+	</div>
+	<script type="module">
+		import * as THREE from 'three';
+		import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+		import { TilesRenderer } from '3d-tiles-renderer';
+		import { Tiles3tzPlugin } from '../src/index.js';
+
+		const renderer = new THREE.WebGLRenderer( { antialias: true } );
+		renderer.setSize( innerWidth, innerHeight );
+		document.body.appendChild( renderer.domElement );
+		const scene = new THREE.Scene();
+		scene.add( new THREE.HemisphereLight( 0xffffff, 0x444444, 3 ) );
+		const camera = new THREE.PerspectiveCamera( 60, innerWidth / innerHeight, 0.1, 1e7 );
+		camera.position.set( 0, 50, 100 );
+		const controls = new OrbitControls( camera, renderer.domElement );
+		const status = document.getElementById( 'status' );
+
+		let tiles = null;
+		let plugin = null;
+
+		function show( rootURL, thePlugin ) {
+
+			if ( tiles ) { scene.remove( tiles.group ); tiles.dispose(); }
+			plugin = thePlugin;
+			tiles = new TilesRenderer( rootURL );
+			window.tiles = tiles; // handy in the browser console
+			tiles.registerPlugin( plugin );
+			tiles.setCamera( camera );
+			tiles.setResolutionFromRenderer( camera, renderer );
+			tiles.addEventListener( 'load-tile-set', () => {
+
+				// frame the tileset
+				const sphere = new THREE.Sphere();
+				tiles.getBoundingSphere( sphere );
+				tiles.group.position.copy( sphere.center ).multiplyScalar( - 1 );
+				camera.position.set( 0, sphere.radius, sphere.radius * 2 );
+				controls.target.set( 0, 0, 0 );
+
+			} );
+			scene.add( tiles.group );
+
+		}
+
+		document.getElementById( 'load' ).onclick = () => {
+
+			// a root URL ending in .3tz is enough: the plugin does the rest
+			show( document.getElementById( 'url' ).value, new Tiles3tzPlugin() );
+
+		};
+
+		document.getElementById( 'file' ).onchange = e => {
+
+			const file = e.target.files[ 0 ];
+			if ( ! file ) return;
+			const p = new Tiles3tzPlugin();
+			show( p.addFile( file ), p );
+
+		};
+
+		const params = new URLSearchParams( location.search );
+		if ( params.has( 'url' ) ) {
+
+			document.getElementById( 'url' ).value = params.get( 'url' );
+			show( params.get( 'url' ), new Tiles3tzPlugin() );
+
+		}
+
+		renderer.setAnimationLoop( () => {
+
+			controls.update();
+			if ( tiles ) {
+
+				camera.updateMatrixWorld();
+				tiles.update();
+				const archives = [ ...plugin.archives.values() ];
+				Promise.all( archives ).then( list => {
+
+					const s = list[ 0 ] && list[ 0 ].source.stats();
+					if ( s ) status.textContent = `${ list[ 0 ].info.files } files in the archive · ${ s.requests } requests · ${ ( s.bytes / 1e6 ).toFixed( 2 ) } MB read` + ( s.ranges === false ? ' (the server ignored Range: whole archive downloaded)' : '' );
+
+				}, err => { status.textContent = String( err.message || err ); } );
+
+			}
+
+			renderer.render( scene, camera );
+
+		} );
+
+		addEventListener( 'resize', () => {
+
+			camera.aspect = innerWidth / innerHeight;
+			camera.updateProjectionMatrix();
+			renderer.setSize( innerWidth, innerHeight );
+
+		} );
+	</script>
+</body>
+</html>

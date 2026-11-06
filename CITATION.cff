@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "3d-tiles-renderer-3tz: reading .3tz archives in 3DTilesRendererJS with HTTP Range requests"
+authors:
+  - family-names: Demetrescu
+    given-names: Emanuel
+    orcid: "https://orcid.org/0000-0002-5065-7970"
+    affiliation: "CNR-ISPC, Istituto di Scienze del Patrimonio Culturale"
+version: 0.1.0
+license: MIT
+date-released: 2026-11-06

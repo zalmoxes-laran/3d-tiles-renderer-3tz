@@ -1,0 +1,38 @@
+{
+  "name": "3d-tiles-renderer-3tz",
+  "version": "0.1.0",
+  "description": "Read 3D Tiles from a .3tz archive in 3DTilesRendererJS, fetching only the tiles in view (HTTP Range).",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src",
+    "LICENSE",
+    "CITATION.cff"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "peerDependencies": {
+    "3d-tiles-renderer": ">=0.4.0"
+  },
+  "peerDependenciesMeta": {
+    "3d-tiles-renderer": {
+      "optional": true
+    }
+  },
+  "keywords": [
+    "3d-tiles",
+    "3tz",
+    "3DTilesRendererJS",
+    "three.js",
+    "cultural-heritage"
+  ],
+  "author": "Emanuel Demetrescu (https://orcid.org/0000-0002-5065-7970)",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}
