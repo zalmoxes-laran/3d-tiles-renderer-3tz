@@ -9,6 +9,7 @@
 		#panel { position: absolute; top: 8px; left: 8px; background: rgba( 0, 0, 0, 0.6 ); padding: 8px 10px; border-radius: 4px; max-width: 420px; }
 		#panel input[type=text] { width: 300px; }
 	</style>
+	<!-- "integrity": the browser refuses a CDN file whose content is not the one pinned here (Subresource Integrity) -->
 	<script type="importmap">
 	{
 		"imports": {
@@ -17,6 +18,15 @@
 			"three/": "https://cdn.jsdelivr.net/npm/three@0.170.0/",
 			"3d-tiles-renderer": "https://cdn.jsdelivr.net/npm/3d-tiles-renderer@0.5.3/build/index.js",
 			"3d-tiles-renderer/": "https://cdn.jsdelivr.net/npm/3d-tiles-renderer@0.5.3/"
+		},
+		"integrity": {
+			"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js": "sha384-GY5FqjttLCFRt/McQbyaVdCk2O1IQtOeX8Py6NfD89BIAsIyJFRl4UgSXrk2vXAk",
+			"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/controls/OrbitControls.js": "sha384-aJoe4qqS/DgF2jh9njAuvA6QIveJYoCuYOfYjdFY8P3eawzmc9bEQ40jq2TvOyuP",
+			"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/utils/BufferGeometryUtils.js": "sha384-wOjwauvHlJO7K6APr7FmMGH2nupQa3Ndzas9bJZhsAMOK055efJud8ns4aYmASKv",
+			"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/loaders/GLTFLoader.js": "sha384-Lq1Wl94so5JCKGDvezrdVMJhdeKQkwb8iwRo59QrPPd61CnrCJZLxYmFlQ8ZuOKR",
+			"https://cdn.jsdelivr.net/npm/3d-tiles-renderer@0.5.3/build/index.js": "sha384-dYVlWWYdnrZhESzcNIQwgAxaD/3ir5P6mCgO5CRtl/cj8JBR+8c/dn1qFGC05BP/",
+			"https://cdn.jsdelivr.net/npm/3d-tiles-renderer@0.5.3/build/renderer-_7gAivIK.js": "sha384-B6T7h2dlkhsh5x0AiITfZNtcmGJrQMNzy4FFS9HoYrgHRgCalaSnWLQF9Dio+JwB",
+			"https://cdn.jsdelivr.net/npm/3d-tiles-renderer@0.5.3/build/renderer-CUfHAmYW.js": "sha384-AgDcIUP7TkAIf5E/JmpN+o4y5TTA0slOcV328/bCWBaxD34ojS2kHVlg+yBFgiv/"
 		}
 	}
 	</script>

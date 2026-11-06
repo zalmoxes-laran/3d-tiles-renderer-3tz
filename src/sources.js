@@ -50,14 +50,20 @@ export function blobSource( blob ) {
 
 }
 
+/** When a server ignores `Range`, the most this source will download and
+ *  keep in memory before refusing (1 GiB). */
+export const DEFAULT_MAX_DOWNLOAD_BYTES = 2 ** 30;
+
 /**
  * @param {string} url
- * @param {{ fetch?: typeof fetch, fetchOptions?: RequestInit }} [options]
+ * @param {{ fetch?: typeof fetch, fetchOptions?: RequestInit, maxDownloadBytes?: number }} [options]
+ *   `maxDownloadBytes`: the limit on the whole-file fallback, when the server ignores `Range`
  * @returns {ByteSource}
  */
 export function httpSource( url, options = {} ) {
 
 	const fetchFn = options.fetch || globalThis.fetch.bind( globalThis );
+	const maxDownloadBytes = options.maxDownloadBytes ?? DEFAULT_MAX_DOWNLOAD_BYTES;
 	const baseOptions = options.fetchOptions || {};
 
 	let whole = null; // the full archive, when the server ignored Range
@@ -67,8 +73,11 @@ export function httpSource( url, options = {} ) {
 	let bytes = 0;
 
 	// Ask for a byte range. Returns the bytes for a 206, or null after a 200
-	// (in which case `whole` now holds the entire archive).
-	const ask = async ( range ) => {
+	// (in which case `whole` now holds the entire archive). A 206 must say,
+	// in Content-Range, the very range asked for (a suffix range: at most
+	// `suffix` bytes ending at the end of the file), and its body is read up
+	// to that length and no further.
+	const ask = async ( range, { offset = null, length = null, suffix = null } ) => {
 
 		requests ++;
 		const headers = { ...( baseOptions.headers || {} ), Range: range };
@@ -77,9 +86,28 @@ export function httpSource( url, options = {} ) {
 		if ( res.status === 206 ) {
 
 			ranges = true;
-			const match = /\/(\d+)\s*$/.exec( res.headers.get( 'content-range' ) || '' );
-			if ( match ) size = Number( match[ 1 ] );
-			const out = new Uint8Array( await res.arrayBuffer() );
+			const match = /^bytes (\d+)-(\d+)\/(\d+)\s*$/.exec( res.headers.get( 'content-range' ) || '' );
+			const bad = () => new Error( `${ url }: the answer to Range ${ range } does not match it (Content-Range: ${ res.headers.get( 'content-range' ) }).` );
+			if ( ! match ) {
+
+				if ( res.body ) await res.body.cancel();
+				throw bad();
+
+			}
+
+			const [ start, end, total ] = match.slice( 1 ).map( Number );
+			const expected = suffix !== null ? Math.min( suffix, total ) : Math.min( length, total - offset );
+			const ok = end >= start && end - start + 1 === expected && ( suffix !== null ? end === total - 1 : start === offset );
+			if ( ! ok ) {
+
+				if ( res.body ) await res.body.cancel();
+				throw bad();
+
+			}
+
+			size = total;
+			const out = await readCapped( res, expected, bad );
+			if ( out.byteLength !== expected ) throw bad();
 			bytes += out.byteLength;
 			return out;
 
@@ -88,7 +116,8 @@ export function httpSource( url, options = {} ) {
 		if ( ! res.ok ) throw new Error( `${ url }: HTTP ${ res.status }` );
 
 		ranges = false;
-		whole = new Uint8Array( await res.arrayBuffer() );
+		whole = await readCapped( res, maxDownloadBytes, () => new Error(
+			`${ url }: the server ignored Range and sent the whole file, which is over the limit of ${ maxDownloadBytes } bytes (maxDownloadBytes).` ) );
 		bytes += whole.byteLength;
 		size = whole.byteLength;
 		return null;
@@ -102,7 +131,7 @@ export function httpSource( url, options = {} ) {
 
 				// a "suffix" range: the last `length` bytes, and the total size
 				// in the Content-Range header
-				const out = await ask( `bytes=-${ length }` );
+				const out = await ask( `bytes=-${ length }`, { suffix: length } );
 				if ( out ) {
 
 					if ( size === null ) throw new Error( `${ url }: the server did not say the file size` );
@@ -119,7 +148,7 @@ export function httpSource( url, options = {} ) {
 
 			if ( ! whole ) {
 
-				const out = await ask( `bytes=${ offset }-${ offset + length - 1 }` );
+				const out = await ask( `bytes=${ offset }-${ offset + length - 1 }`, { offset, length } );
 				if ( out ) return out;
 
 			}
@@ -129,5 +158,51 @@ export function httpSource( url, options = {} ) {
 		},
 		stats: () => ( { kind: 'http', ranges, requests, bytes } ),
 	};
+
+}
+
+// The body of a response, refused as soon as it passes `limit` bytes (its
+// declared length first, then what actually arrives).
+async function readCapped( res, limit, error ) {
+
+	const declared = Number( res.headers.get( 'content-length' ) );
+	if ( declared > limit ) {
+
+		if ( res.body ) await res.body.cancel();
+		throw error();
+
+	}
+
+	if ( ! res.body ) {
+
+		const out = new Uint8Array( await res.arrayBuffer() );
+		if ( out.byteLength > limit ) throw error();
+		return out;
+
+	}
+
+	const reader = res.body.getReader();
+	const parts = [];
+	let total = 0;
+	for ( ;; ) {
+
+		const { done, value } = await reader.read();
+		if ( done ) break;
+		total += value.length;
+		if ( total > limit ) {
+
+			await reader.cancel();
+			throw error();
+
+		}
+
+		parts.push( value );
+
+	}
+
+	const out = new Uint8Array( total );
+	let at = 0;
+	for ( const part of parts ) { out.set( part, at ); at += part.length; }
+	return out;
 
 }

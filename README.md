@@ -67,6 +67,28 @@ There are no runtime dependencies.
 - **Supported content.** Entries may be stored or deflate-compressed, ZIP64 archives are supported, and paths are compared in Unicode NFC (so archives made on macOS work).
 - **Not supported.** Encryption, multi-disk archives, and compression methods other than deflate.
 
+## Archives from an untrusted source
+
+An archive can be damaged, or built on purpose to harm whoever opens it. The reader checks what an archive says before it acts on it:
+
+- **The central directory** must lie inside the file and end before the records that describe it; otherwise the archive is refused before any further request. When the directory is read, the request covers its declared size and no more.
+- **Each entry** may take at most `maxEntryBytes` (256 MB by default), compressed or once decompressed. Decompression stops as soon as the limit is passed, so a "zip bomb" of a few kilobytes cannot fill the browser's memory. Real tiles are far smaller.
+- **The index** may not be larger than the archive's entries need (24 bytes each), nor than `maxEntryBytes`.
+- **Each answer to a `Range` request** must say, in `Content-Range`, the very range that was asked for, and its body is read up to that length and no further: a server that sends more than it was asked cannot fill the memory either.
+- **A server that ignores `Range`** sends the whole archive; the reader keeps it up to `maxDownloadBytes` (1 GiB by default) and refuses it beyond.
+
+```js
+const plugin = new Tiles3tzPlugin( {
+	archiveOptions: { maxEntryBytes: 64 * 1024 * 1024 },
+	maxDownloadBytes: 256 * 1024 * 1024,
+	archiveOnly: true,
+} );
+```
+
+A tileset can also point to files outside the archive (an external tileset, a tile on another server), exactly as an unpacked tileset can. By default those requests are left to the renderer. With `archiveOnly: true` the plugin answers 403 to every request the renderer makes outside the registered archives. This covers what the renderer fetches (tiles, external tilesets); resources that a glTF loader fetches by itself, such as a texture referenced by URL inside a glTF, follow the loader's own settings.
+
+The example page pins the three.js and 3DTilesRendererJS files it loads from the CDN with Subresource Integrity hashes, so the browser refuses a file whose content has changed.
+
 ## Measurements
 
 The test was a synthetic tileset of 3000 tiles of 58 KB each, served with 20 ms of simulated latency and 6 requests at a time. It compares this reader with an earlier version of it that used three requests per tile.
@@ -102,7 +124,8 @@ The tests use Node 18 or later and need no installed packages. They build small 
 - deflate, ZIP64, and long local extra fields;
 - names stored in NFD;
 - a server without `Range`;
-- rejection of archives that are not .3tz.
+- rejection of archives that are not .3tz;
+- the limits for untrusted archives: a zip bomb, an entry over the size limit (through the directory and through the index), a directory that does not end where it should, a directory offset moved back, the whole-file fallback over its limit, an index over the entry limit, a `206` answer that is not the range asked for or is longer than it, and `archiveOnly`.
 
 ## How this was written
 

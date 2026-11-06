@@ -30,7 +30,11 @@ export class Tiles3tzPlugin {
 	/**
 	 * @param {object} [options]
 	 * @param {typeof fetch} [options.fetch]  used for the Range requests (default: global fetch)
-	 * @param {object} [options.archiveOptions]  passed to `Archive3tz.open`
+	 * @param {object} [options.archiveOptions]  passed to `Archive3tz.open` (e.g. `maxEntryBytes`)
+	 * @param {number} [options.maxDownloadBytes]  when a server ignores `Range`, the most it may send
+	 * @param {boolean} [options.archiveOnly]  answer 403 to every request the renderer makes outside
+	 *   the registered archives (for archives from an untrusted source: their tileset.json cannot
+	 *   point the browser elsewhere). Default false, as for an unpacked tileset.
 	 */
 	constructor( options = {} ) {
 
@@ -40,6 +44,8 @@ export class Tiles3tzPlugin {
 		this.tiles = null;
 		this.fetch = options.fetch || null;
 		this.archiveOptions = options.archiveOptions || {};
+		this.maxDownloadBytes = options.maxDownloadBytes;
+		this.archiveOnly = !! options.archiveOnly;
 		/** @type {Map<string, Promise<Archive3tz>>} base URL (ending in "/") → archive */
 		this.archives = new Map();
 		this._fileCount = 0;
@@ -78,7 +84,7 @@ export class Tiles3tzPlugin {
 		if ( ! this.archives.has( base ) ) {
 
 			const fetchOptions = this.tiles ? this.tiles.fetchOptions : {};
-			const source = httpSource( absolute, { fetch: this.fetch || undefined, fetchOptions } );
+			const source = httpSource( absolute, { fetch: this.fetch || undefined, fetchOptions, maxDownloadBytes: this.maxDownloadBytes } );
 			this.archives.set( base, Archive3tz.open( source, this.archiveOptions ) );
 
 		}
@@ -113,7 +119,13 @@ export class Tiles3tzPlugin {
 	fetchData( url, options ) {
 
 		const base = this.baseFor( url );
-		if ( base === null ) return null;
+		if ( base === null ) {
+
+			if ( ! this.archiveOnly ) return null;
+			return Promise.resolve( new Response( null, { status: 403, statusText: `${ url } is outside the archive (archiveOnly)` } ) );
+
+		}
+
 		const path = decodeURIComponent( url.slice( base.length ).split( /[?#]/ )[ 0 ] );
 
 		return this.archives.get( base ).then( async archive => {

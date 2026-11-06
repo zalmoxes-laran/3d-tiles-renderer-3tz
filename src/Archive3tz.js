@@ -13,6 +13,11 @@ export const DEFAULT_MAX_DIRECTORY_BYTES = 16 * 1024 * 1024;
  *  the first request takes this much data along with the header. */
 export const DEFAULT_GUESS_BYTES = 64 * 1024;
 
+/** The most a single entry may take, compressed or once decompressed. Real
+ *  tiles are far smaller; the limit stops a damaged or hostile archive from
+ *  filling the browser's memory. */
+export const DEFAULT_MAX_ENTRY_BYTES = 256 * 1024 * 1024;
+
 /**
  * A .3tz archive opened for reading, one entry at a time.
  *
@@ -25,13 +30,14 @@ export class Archive3tz {
 
 	/**
 	 * @param {import('./sources.js').ByteSource} source
-	 * @param {{ tailBytes?: number, maxDirectoryBytes?: number, guessBytes?: number }} [options]
+	 * @param {{ tailBytes?: number, maxDirectoryBytes?: number, guessBytes?: number, maxEntryBytes?: number }} [options]
 	 */
 	static async open( source, options = {} ) {
 
 		const tailBytes = options.tailBytes ?? DEFAULT_TAIL_BYTES;
 		const maxDirectoryBytes = options.maxDirectoryBytes ?? DEFAULT_MAX_DIRECTORY_BYTES;
 		const guessBytes = options.guessBytes ?? DEFAULT_GUESS_BYTES;
+		const maxEntryBytes = options.maxEntryBytes ?? DEFAULT_MAX_ENTRY_BYTES;
 		const end = await readEnd( source, { tailBytes, maxDirectoryBytes } );
 
 		if ( end.directory ) {
@@ -39,7 +45,7 @@ export class Archive3tz {
 			const { entries, lastPath } = parseDirectory( end.directory );
 			checkIndexEntry( lastPath, entries.get( INDEX_NAME ) );
 			entries.delete( INDEX_NAME );
-			return new Archive3tz( source, { entries, index: null, guessBytes, openRequests: end.requests(), zip64: end.zip64 } );
+			return new Archive3tz( source, { entries, index: null, guessBytes, maxEntryBytes, openRequests: end.requests(), zip64: end.zip64 } );
 
 		}
 
@@ -49,18 +55,21 @@ export class Archive3tz {
 		const { entries, lastPath } = parseDirectory( record );
 		const location = entries.get( INDEX_NAME );
 		checkIndexEntry( lastPath, location );
-		const index = await readEntryAt( source, INDEX_NAME, location.offset, location, 0 );
+		// the index holds 24 bytes per file: never more than the archive has entries
+		if ( location.compressedSize > end.entries * RECORD_BYTES ) throw new Error( `Damaged .3tz: ${ INDEX_NAME } is larger than its ${ end.entries } entries need.` );
+		const index = await readEntryAt( source, INDEX_NAME, location.offset, location, 0, maxEntryBytes );
 		if ( index.length % RECORD_BYTES !== 0 ) throw new Error( 'The .3tz index length is not a multiple of 24.' );
-		return new Archive3tz( source, { entries: null, index, guessBytes, openRequests: end.requests() + 1, zip64: end.zip64 } );
+		return new Archive3tz( source, { entries: null, index, guessBytes, maxEntryBytes, openRequests: end.requests() + 1, zip64: end.zip64 } );
 
 	}
 
-	constructor( source, { entries, index, guessBytes, openRequests, zip64 } ) {
+	constructor( source, { entries, index, guessBytes, maxEntryBytes = DEFAULT_MAX_ENTRY_BYTES, openRequests, zip64 } ) {
 
 		this.source = source;
 		this._entries = entries;
 		this._index = index;
 		this._guessBytes = guessBytes;
+		this._maxEntryBytes = maxEntryBytes;
 		/** How the archive was opened: useful for logs and tests. */
 		this.info = {
 			files: entries ? entries.size : index.length / RECORD_BYTES,
@@ -90,12 +99,12 @@ export class Archive3tz {
 		if ( this._entries ) {
 
 			const location = this._entries.get( p );
-			return location ? readEntryAt( this.source, p, location.offset, location, 0 ) : null;
+			return location ? readEntryAt( this.source, p, location.offset, location, 0, this._maxEntryBytes ) : null;
 
 		}
 
 		const offset = lookup( this._index, p );
-		return offset === null ? null : readEntryAt( this.source, p, offset, null, this._guessBytes );
+		return offset === null ? null : readEntryAt( this.source, p, offset, null, Math.min( this._guessBytes, this._maxEntryBytes ), this._maxEntryBytes );
 
 	}
 

@@ -89,6 +89,7 @@ export async function readEnd( source, { tailBytes, maxDirectoryBytes } ) {
 	let directorySize = tv.getUint32( eocd + 12, true );
 	let directoryOffset = tv.getUint32( eocd + 16, true );
 	let zip64 = false;
+	let zip64RecordOffset = - 1;
 
 	if ( entries === 0xffff || directorySize === 0xffffffff || directoryOffset === 0xffffffff ) {
 
@@ -96,7 +97,9 @@ export async function readEnd( source, { tailBytes, maxDirectoryBytes } ) {
 		// ZIP64 end record, which holds the real values.
 		const locator = eocd - 20;
 		if ( locator < 0 || tv.getUint32( locator, true ) !== SIG_ZIP64_LOCATOR ) throw new Error( 'ZIP64 archive without its locator.' );
-		const record = await bytesAt( readU64( tv, locator + 8 ), 56 );
+		zip64RecordOffset = readU64( tv, locator + 8 );
+		if ( zip64RecordOffset + 56 > tailStart + locator ) throw new Error( 'Damaged ZIP64: its end record is not before its locator.' );
+		const record = await bytesAt( zip64RecordOffset, 56 );
 		const rv = viewOf( record );
 		if ( rv.getUint32( 0, true ) !== SIG_ZIP64_EOCD ) throw new Error( 'ZIP64 end of central directory not found.' );
 		entries = readU64( rv, 32 );
@@ -106,7 +109,18 @@ export async function readEnd( source, { tailBytes, maxDirectoryBytes } ) {
 
 	}
 
+	// The directory must lie inside the file and end before the records that
+	// describe it (the ZIP64 end record, or the EOCD). Values that say
+	// otherwise come from a damaged or hostile archive: refused before any
+	// further request is made.
 	const directoryEnd = directoryOffset + directorySize;
+	const recordsStart = zip64 ? zip64RecordOffset : tailStart + eocd;
+	if ( ! Number.isSafeInteger( directoryEnd ) || directoryEnd > recordsStart ) {
+
+		throw new Error( 'Damaged ZIP: the central directory does not end before the end records.' );
+
+	}
+
 	let directory = null;
 	if ( directoryOffset >= tailStart ) {
 
@@ -114,7 +128,8 @@ export async function readEnd( source, { tailBytes, maxDirectoryBytes } ) {
 
 	} else if ( directorySize <= maxDirectoryBytes ) {
 
-		const before = await bytesAt( directoryOffset, tailStart - directoryOffset );
+		// only the directory's own bytes: never more than `directorySize`
+		const before = await bytesAt( directoryOffset, Math.min( directorySize, tailStart - directoryOffset ) );
 		directory = concat( before, tail.subarray( 0, Math.max( 0, directoryEnd - tailStart ) ) );
 
 	}
@@ -215,10 +230,15 @@ export function parseDirectory( directory ) {
  * @param {number} offset
  * @param {EntryLocation | null} known
  * @param {number} guessBytes
+ * @param {number} [maxEntryBytes]  the most an entry may take, compressed or
+ *   once decompressed: a larger one is refused (a damaged or hostile archive,
+ *   a "zip bomb")
  */
-export async function readEntryAt( source, path, offset, known, guessBytes ) {
+export async function readEntryAt( source, path, offset, known, guessBytes, maxEntryBytes = Infinity ) {
 
 	const wanted = normalizePath( path );
+	const tooLarge = what => new Error( `${ path }: ${ what } is over the limit of ${ maxEntryBytes } bytes (maxEntryBytes).` );
+	if ( known && known.compressedSize > maxEntryBytes ) throw tooLarge( 'its size' );
 	const nameLength = known ? known.nameLength : new TextEncoder().encode( wanted ).length;
 	const first = 30 + nameLength + EXTRA_MARGIN + ( known ? known.compressedSize : guessBytes );
 
@@ -267,6 +287,7 @@ export async function readEntryAt( source, path, offset, known, guessBytes ) {
 
 	}
 
+	if ( compressedSize > maxEntryBytes ) throw tooLarge( 'its size' );
 	await ensure( dataStart + compressedSize );
 
 	const name = normalizePath( new TextDecoder().decode( buffer.subarray( 30, 30 + localNameLength ) ) );
@@ -274,14 +295,37 @@ export async function readEntryAt( source, path, offset, known, guessBytes ) {
 
 	const data = buffer.subarray( dataStart, dataStart + compressedSize );
 	if ( method === 0 ) return data;
-	if ( method === 8 ) return inflateRaw( data );
+	if ( method === 8 ) return inflateRaw( data, maxEntryBytes, () => tooLarge( 'its decompressed size' ) );
 	throw new Error( `${ path }: compression method ${ method } is not supported (only stored and deflate).` );
 
 }
 
-async function inflateRaw( data ) {
+// Inflate, stopping as soon as the output passes `limit` bytes: a few KB
+// of deflate can expand to gigabytes, so the size is checked while reading.
+async function inflateRaw( data, limit, error ) {
 
-	const stream = new Blob( [ data ] ).stream().pipeThrough( new DecompressionStream( 'deflate-raw' ) );
-	return new Uint8Array( await new Response( stream ).arrayBuffer() );
+	const reader = new Blob( [ data ] ).stream().pipeThrough( new DecompressionStream( 'deflate-raw' ) ).getReader();
+	const parts = [];
+	let total = 0;
+	for ( ;; ) {
+
+		const { done, value } = await reader.read();
+		if ( done ) break;
+		total += value.length;
+		if ( total > limit ) {
+
+			await reader.cancel();
+			throw error();
+
+		}
+
+		parts.push( value );
+
+	}
+
+	const out = new Uint8Array( total );
+	let at = 0;
+	for ( const part of parts ) { out.set( part, at ); at += part.length; }
+	return out;
 
 }
