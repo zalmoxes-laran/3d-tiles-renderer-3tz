@@ -18,6 +18,10 @@ export const DEFAULT_GUESS_BYTES = 64 * 1024;
  *  filling the browser's memory. */
 export const DEFAULT_MAX_ENTRY_BYTES = 256 * 1024 * 1024;
 
+/** Records of the central directory read between two yields to the page
+ *  (see `parseDirectory`). 0: the directory is read in one piece. */
+export const DEFAULT_YIELD_EVERY = 16384;
+
 /**
  * A .3tz archive opened for reading, one entry at a time.
  *
@@ -30,7 +34,11 @@ export class Archive3tz {
 
 	/**
 	 * @param {import('./sources.js').ByteSource} source
-	 * @param {{ tailBytes?: number, maxDirectoryBytes?: number, guessBytes?: number, maxEntryBytes?: number }} [options]
+	 * @param {{ tailBytes?: number, maxDirectoryBytes?: number, guessBytes?: number, maxEntryBytes?: number,
+	 *   requireIndex?: boolean, yieldEvery?: number }} [options]
+	 *   `requireIndex: false` also opens a plain ZIP, without `@3dtilesIndex1@`
+	 *   (a tileset zipped by hand): its entries are found through the central
+	 *   directory, with the same limits as a .3tz.
 	 */
 	static async open( source, options = {} ) {
 
@@ -38,23 +46,42 @@ export class Archive3tz {
 		const maxDirectoryBytes = options.maxDirectoryBytes ?? DEFAULT_MAX_DIRECTORY_BYTES;
 		const guessBytes = options.guessBytes ?? DEFAULT_GUESS_BYTES;
 		const maxEntryBytes = options.maxEntryBytes ?? DEFAULT_MAX_ENTRY_BYTES;
+		const requireIndex = options.requireIndex ?? true;
+		const yieldEvery = options.yieldEvery ?? DEFAULT_YIELD_EVERY;
 		const end = await readEnd( source, { tailBytes, maxDirectoryBytes } );
 
-		if ( end.directory ) {
+		// the whole central directory: path → location of every entry
+		const byDirectory = async ( directory, requests ) => {
 
-			const { entries, lastPath } = parseDirectory( end.directory );
-			checkIndexEntry( lastPath, entries.get( INDEX_NAME ) );
+			const { entries, lastPath } = await parseDirectory( directory, { yieldEvery } );
+			if ( requireIndex ) checkIndexEntry( lastPath, entries.get( INDEX_NAME ) );
 			entries.delete( INDEX_NAME );
-			return new Archive3tz( source, { entries, index: null, guessBytes, maxEntryBytes, openRequests: end.requests(), zip64: end.zip64 } );
+			return new Archive3tz( source, { entries, index: null, guessBytes, maxEntryBytes, openRequests: requests, zip64: end.zip64 } );
 
-		}
+		};
+
+		if ( end.directory ) return byDirectory( end.directory, end.requests() );
 
 		// The central directory is too large: read only its last record (the
 		// index entry), then the index itself.
-		const record = await findLastRecord( end, INDEX_NAME );
-		const { entries, lastPath } = parseDirectory( record );
-		const location = entries.get( INDEX_NAME );
-		checkIndexEntry( lastPath, location );
+		let location;
+		try {
+
+			const { entries, lastPath } = await parseDirectory( await findLastRecord( end, INDEX_NAME ) );
+			location = entries.get( INDEX_NAME );
+			checkIndexEntry( lastPath, location );
+
+		} catch ( error ) {
+
+			// A plain ZIP has no index to fall back on (or not a usable one):
+			// its directory is read whole, held to the limit of any one entry.
+			if ( requireIndex || ! error.noIndex ) throw error;
+			if ( end.directorySize > maxEntryBytes ) throw new Error( `The ZIP's central directory (${ end.directorySize } bytes) is over the limit of ${ maxEntryBytes } bytes (maxEntryBytes), and there is no ${ INDEX_NAME } to read instead.` );
+			const directory = await end.directoryTail( end.directorySize );
+			return byDirectory( directory, end.requests() );
+
+		}
+
 		// the index holds 24 bytes per file: never more than the archive has entries
 		if ( location.compressedSize > end.entries * RECORD_BYTES ) throw new Error( `Damaged .3tz: ${ INDEX_NAME } is larger than its ${ end.entries } entries need.` );
 		const index = await readEntryAt( source, INDEX_NAME, location.offset, location, 0, maxEntryBytes );
@@ -63,7 +90,7 @@ export class Archive3tz {
 
 	}
 
-	constructor( source, { entries, index, guessBytes, maxEntryBytes = DEFAULT_MAX_ENTRY_BYTES, openRequests, zip64 } ) {
+	constructor( source, { entries, index, guessBytes = DEFAULT_GUESS_BYTES, maxEntryBytes = DEFAULT_MAX_ENTRY_BYTES, openRequests, zip64 } ) {
 
 		this.source = source;
 		this._entries = entries;
@@ -77,6 +104,18 @@ export class Archive3tz {
 			openRequests,
 			zip64,
 		};
+
+	}
+
+	/**
+	 * The path of every file in the archive (folders and the index left out),
+	 * when it was opened through its central directory; null when it was
+	 * opened through the index, which finds a path but does not list them.
+	 * @returns {string[] | null}
+	 */
+	names() {
+
+		return this._entries ? [ ...this._entries.keys() ] : null;
 
 	}
 
@@ -112,8 +151,9 @@ export class Archive3tz {
 
 function checkIndexEntry( lastPath, location ) {
 
-	if ( lastPath !== INDEX_NAME || ! location ) throw new Error( `Not a .3tz: the last entry is not ${ INDEX_NAME }.` );
-	if ( location.method !== 0 ) throw new Error( `Not a .3tz: ${ INDEX_NAME } must be stored without compression.` );
+	const noIndex = message => Object.assign( new Error( message ), { noIndex: true } );
+	if ( lastPath !== INDEX_NAME || ! location ) throw noIndex( `Not a .3tz: the last entry is not ${ INDEX_NAME }.` );
+	if ( location.method !== 0 ) throw noIndex( `Not a .3tz: ${ INDEX_NAME } must be stored without compression.` );
 
 }
 
@@ -147,6 +187,6 @@ async function findLastRecord( end, name ) {
 
 	}
 
-	throw new Error( `Not a .3tz: the last entry is not ${ INDEX_NAME }.` );
+	throw Object.assign( new Error( `Not a .3tz: the last entry is not ${ INDEX_NAME }.` ), { noIndex: true } );
 
 }

@@ -48,7 +48,9 @@ Reading the archive takes three steps.
 
 If the server ignores `Range` and returns the whole file, the plugin keeps that single download and serves tiles from it. Each archive is then transferred once, as a plain download would be.
 
-The code is in five short files:
+A long central directory is read in slices of 16 384 records (`yieldEvery`), and the page is let go between two slices: a directory of 16 MB does not freeze the page while it is read.
+
+The code is in five short files, with their type declarations:
 
 | File | What it does |
 |---|---|
@@ -57,13 +59,38 @@ The code is in five short files:
 | `src/index3tz.js` | the `@3dtilesIndex1@` index and MD5 |
 | `src/Archive3tz.js` | opens an archive and reads an entry |
 | `src/Tiles3tzPlugin.js` | the 3DTilesRendererJS plugin |
+| `src/index.d.ts` | the TypeScript declarations |
 
 There are no runtime dependencies.
+
+## Reading an archive without the plugin
+
+`Archive3tz` reads an archive on its own, for an application that wants the files rather than a rendered tileset:
+
+```js
+import { Archive3tz, httpSource, blobSource } from '3d-tiles-renderer-3tz';
+
+const source = httpSource( 'https://example.org/site.3tz' );
+const archive = await Archive3tz.open( source );
+const tileset = await archive.read( 'tileset.json' ); // Uint8Array, or null if absent
+archive.has( 'tiles/0.glb' );                        // true or false, no request
+archive.names();                                     // every path, or null (see below)
+archive.info;                                        // { files, lookup, openRequests, zip64 }
+```
+
+- **`names()`** lists every file when the archive was opened through its central directory. When it was opened through the index (a directory over `maxDirectoryBytes`), it returns `null`: the index finds a path but cannot list them.
+- **A plain ZIP**, without `@3dtilesIndex1@` (a tileset zipped by hand), opens with `Archive3tz.open( source, { requireIndex: false } )`. Its entries are found through the central directory, with the same limits as a .3tz. If its directory is over `maxDirectoryBytes` and it has no index, the directory is read whole, up to `maxEntryBytes`.
+- **Errors of `httpSource`** carry `range`, the `Range` header that was asked (`'bytes=0-1023'`, or `'bytes=-262144'` for the end of the file), and `status` when a response came. A network failure is passed on as it is, with `range` added.
+- **`source.stats()`** says how many requests and bytes were made. For HTTP it also gives the `url`, the `etag` of the first response that had one (a key for a tile cache), and `pending`, the ranges asked and not yet answered.
+- **`normalizePath`** (NFC, `/`, no leading `/`) is the rule the archive compares paths with; `INDEX_NAME` is `'@3dtilesIndex1@'`.
+- **Defaults** are exported: `DEFAULT_TAIL_BYTES` (256 KB), `DEFAULT_MAX_DIRECTORY_BYTES` (16 MB), `DEFAULT_GUESS_BYTES` (64 KB), `DEFAULT_MAX_ENTRY_BYTES` (256 MB), `DEFAULT_YIELD_EVERY` (16 384 records), `DEFAULT_MAX_DOWNLOAD_BYTES` (1 GiB).
+
+A source is any object with `tail( length )`, `read( offset, length )` and `stats()` (the `ByteSource` type in `src/index.d.ts`), so an application can read archives from somewhere else.
 
 ## Requirements and limits
 
 - **Server.** It must answer `Range` requests. For a different origin, CORS must allow the `Range` header and expose `Content-Range`. S3-compatible stores such as MinIO and RustFS, nginx and Apache do this.
-- **Archive.** It must be a .3tz whose last entry is the uncompressed index, as the specification asks. A plain ZIP of a tileset is refused, with a clear message.
+- **Archive.** By default it must be a .3tz whose last entry is the uncompressed index, as the specification asks; a plain ZIP of a tileset is refused, with a clear message. With `requireIndex: false` (in `archiveOptions` for the plugin) a plain ZIP is read too.
 - **Supported content.** Entries may be stored or deflate-compressed, ZIP64 archives are supported, and paths are compared in Unicode NFC (so archives made on macOS work).
 - **Not supported.** Encryption, multi-disk archives, and compression methods other than deflate.
 
@@ -104,6 +131,8 @@ On a real photogrammetric tileset (Templu Mare, Sarmizegetusa Regia: 7302 entrie
 
 A large archive, read over HTTP with `Range` from a local server: the 2013 survey of the same temple, 6.5 GB, 236 607 entries, ZIP64 with entries beyond the 4 GB mark. It opens with 2 requests in about 40 ms through the `@3dtilesIndex1@` index, and each file (the first, one in the middle, the last at 6.55 GB) comes with a single request, byte-identical to what Python's `zipfile` extracts.
 
+Reading that archive's whole central directory (16.8 MB, which `names()` needs, with `maxDirectoryBytes: Infinity`) held Node's event loop for 102 ms at most in one piece, and for 12 ms at most in slices of 16 384 records.
+
 Note for testing in Node: `fs.openAsBlob` (Node 22) reports a wrong size for files over 4 GB, so a Blob made that way cannot be read past that point. Browsers' `File` objects and HTTP are not affected.
 
 ## Example
@@ -124,7 +153,10 @@ The tests use Node 18 or later and need no installed packages. They build small 
 - deflate, ZIP64, and long local extra fields;
 - names stored in NFD;
 - a server without `Range`;
-- rejection of archives that are not .3tz;
+- rejection of archives that are not .3tz, and plain ZIPs read with `requireIndex: false` (a zip bomb inside one is still refused);
+- `names()`, through the directory and through the index;
+- a directory of 50 000 records read in slices, with a timer that keeps running;
+- `normalizePath` and `INDEX_NAME`; `status` and `range` on source errors; the ETag and the pending ranges in `stats()`; every export declared in `index.d.ts`;
 - the limits for untrusted archives: a zip bomb, an entry over the size limit (through the directory and through the index), a directory that does not end where it should, a directory offset moved back, the whole-file fallback over its limit, an index over the entry limit, a `206` answer that is not the range asked for or is longer than it, and `archiveOnly`.
 
 ## How this was written

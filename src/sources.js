@@ -12,10 +12,25 @@
  *   that single download and slices it from then on: the archive is then
  *   transferred once, as a plain download would be.
  *
+ * An error of `httpSource` (an HTTP status, a network failure, an answer
+ * that does not match the range) carries `range`, the `Range` header asked
+ * (`'bytes=a-b'` or `'bytes=-n'`), and `status` when a response came.
+ *
  * @typedef {object} ByteSource
  * @property {(length: number) => Promise<{ bytes: Uint8Array, size: number }>} tail
  * @property {(offset: number, length: number) => Promise<Uint8Array>} read
- * @property {() => { kind: 'blob' | 'http', ranges: boolean | null, requests: number, bytes: number }} stats
+ * @property {() => SourceStats} stats
+ */
+
+/**
+ * @typedef {object} SourceStats
+ * @property {'blob' | 'http'} kind
+ * @property {boolean | null} ranges  whether the server honoured `Range` (null before the first answer)
+ * @property {number} requests
+ * @property {number} bytes  received so far
+ * @property {string} [url]  http only
+ * @property {string | null} [etag]  http only: the ETag of the first response that had one
+ * @property {string[]} [pending]  http only: the ranges asked and not yet answered
  */
 
 /**
@@ -71,17 +86,51 @@ export function httpSource( url, options = {} ) {
 	let size = null;
 	let requests = 0;
 	let bytes = 0;
+	let etag = null;
+	const pending = new Set();
+
+	// Every error leaves with the range asked and, when a response came, its
+	// status: a log can then say which bytes did not arrive.
+	const ask = async ( range, wanted ) => {
+
+		requests ++;
+		pending.add( range );
+		let status;
+		try {
+
+			return await answer( range, wanted, s => { status = s; } );
+
+		} catch ( error ) {
+
+			const e = error !== null && typeof error === 'object' ? error : new Error( `${ url }: ${ error }` );
+			try {
+
+				if ( ! ( 'range' in e ) ) e.range = range;
+				if ( status !== undefined && ! ( 'status' in e ) ) e.status = status;
+
+			} catch { /* a frozen error stays as it is */ }
+
+			throw e;
+
+		} finally {
+
+			pending.delete( range );
+
+		}
+
+	};
 
 	// Ask for a byte range. Returns the bytes for a 206, or null after a 200
 	// (in which case `whole` now holds the entire archive). A 206 must say,
 	// in Content-Range, the very range asked for (a suffix range: at most
 	// `suffix` bytes ending at the end of the file), and its body is read up
 	// to that length and no further.
-	const ask = async ( range, { offset = null, length = null, suffix = null } ) => {
+	const answer = async ( range, { offset = null, length = null, suffix = null }, setStatus ) => {
 
-		requests ++;
 		const headers = { ...( baseOptions.headers || {} ), Range: range };
 		const res = await fetchFn( url, { ...baseOptions, headers } );
+		setStatus( res.status );
+		if ( etag === null && res.headers.get( 'etag' ) ) etag = res.headers.get( 'etag' );
 
 		if ( res.status === 206 ) {
 
@@ -156,7 +205,7 @@ export function httpSource( url, options = {} ) {
 			return whole.subarray( offset, offset + length );
 
 		},
-		stats: () => ( { kind: 'http', ranges, requests, bytes } ),
+		stats: () => ( { kind: 'http', ranges, requests, bytes, url, etag, pending: [ ...pending ] } ),
 	};
 
 }

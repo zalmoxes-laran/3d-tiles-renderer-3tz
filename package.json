@@ -1,11 +1,15 @@
 {
   "name": "3d-tiles-renderer-3tz",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Read 3D Tiles from a .3tz archive in 3DTilesRendererJS, fetching only the tiles in view (HTTP Range).",
   "type": "module",
   "main": "src/index.js",
+  "types": "src/index.d.ts",
   "exports": {
-    ".": "./src/index.js"
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    }
   },
   "files": [
     "src",

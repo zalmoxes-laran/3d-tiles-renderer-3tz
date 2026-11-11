@@ -32,6 +32,9 @@ export const readU64 = ( view, at ) => view.getUint32( at, true ) + view.getUint
 
 const viewOf = bytes => new DataView( bytes.buffer, bytes.byteOffset, bytes.byteLength );
 
+// a macrotask: timers, input and rendering get their turn
+const yieldToPage = () => new Promise( resolve => setTimeout( resolve, 0 ) );
+
 export function concat( a, b ) {
 
 	const out = new Uint8Array( a.length + b.length );
@@ -155,18 +158,27 @@ export async function readEnd( source, { tailBytes, maxDirectoryBytes } ) {
  * Every record of a central directory, as path → location. Also returns the
  * path of the last record, which in a .3tz must be the index.
  *
+ * A long directory is read in slices of `yieldEvery` records, and the page is
+ * let go between two slices (a `setTimeout`): 16 MB of directory, some
+ * 250 000 records, would otherwise hold the main thread about 0.3 s.
+ * `yieldEvery: 0` reads it in one piece.
+ *
  * @param {Uint8Array} directory
- * @returns {{ entries: Map<string, EntryLocation>, lastPath: string }}
+ * @param {{ yieldEvery?: number }} [options]
+ * @returns {Promise<{ entries: Map<string, EntryLocation>, lastPath: string }>}
  */
-export function parseDirectory( directory ) {
+export async function parseDirectory( directory, { yieldEvery = 0 } = {} ) {
 
 	const view = viewOf( directory );
 	const decoder = new TextDecoder();
 	const entries = new Map();
 	let lastPath = '';
+	let records = 0;
 
 	let p = 0;
 	while ( p + 46 <= directory.length && view.getUint32( p, true ) === SIG_CENTRAL_HEADER ) {
+
+		if ( yieldEvery > 0 && ++ records % yieldEvery === 0 ) await yieldToPage();
 
 		const method = view.getUint16( p + 10, true );
 		let compressedSize = view.getUint32( p + 20, true );
