@@ -12,6 +12,7 @@ Everything of 0.2.0 works as before.
 - `httpSource( … ).stats()` also gives `url`, `etag` (of the first response that had one) and `pending` (the ranges asked and not yet answered).
 - TypeScript declarations in `src/index.d.ts` (`types` in `package.json`), with the `ByteSource` and `SourceStats` types.
 - The `Archive3tz` constructor's `guessBytes` defaults to `DEFAULT_GUESS_BYTES`.
+- `httpSource` reads archives on static hosts such as GitHub Pages and raw.githubusercontent.com: when the suffix range of `tail()` gets no response (across origins it needs a CORS preflight, which those hosts refuse), the size comes from a `HEAD` and the tail from a plain `bytes=a-b` range. A 206 whose `Content-Range` the browser hides (not in `Access-Control-Expose-Headers`) is checked by the length of its body. Servers that answer the suffix range cost no extra request.
 
 ## 0.2.0 — 2026-11-06
 
