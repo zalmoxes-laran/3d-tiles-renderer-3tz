@@ -137,6 +137,20 @@ export function httpSource( url, options = {} ) {
 			ranges = true;
 			const match = /^bytes (\d+)-(\d+)\/(\d+)\s*$/.exec( res.headers.get( 'content-range' ) || '' );
 			const bad = () => new Error( `${ url }: the answer to Range ${ range } does not match it (Content-Range: ${ res.headers.get( 'content-range' ) }).` );
+			// A cross-origin host that does not list Content-Range in
+			// Access-Control-Expose-Headers (GitHub Pages, raw.githubusercontent.com)
+			// hides it from the page. For a plain `bytes=a-b` the status and the
+			// length of the body are then the check.
+			if ( ! match && offset !== null && res.headers.get( 'content-range' ) === null ) {
+
+				const expected = size !== null ? Math.min( length, size - offset ) : length;
+				const out = await readCapped( res, expected, bad );
+				if ( out.byteLength !== expected ) throw bad();
+				bytes += out.byteLength;
+				return out;
+
+			}
+
 			if ( ! match ) {
 
 				if ( res.body ) await res.body.cancel();
@@ -173,6 +187,24 @@ export function httpSource( url, options = {} ) {
 
 	};
 
+	// The size of the file from a HEAD, or null when there is no usable answer.
+	const headSize = async () => {
+
+		requests ++;
+		try {
+
+			const res = await fetchFn( url, { ...baseOptions, method: 'HEAD' } );
+			const n = Number( res.headers.get( 'content-length' ) );
+			return res.ok && Number.isSafeInteger( n ) && n > 0 ? n : null;
+
+		} catch {
+
+			return null;
+
+		}
+
+	};
+
 	return {
 		async tail( length ) {
 
@@ -180,7 +212,27 @@ export function httpSource( url, options = {} ) {
 
 				// a "suffix" range: the last `length` bytes, and the total size
 				// in the Content-Range header
-				const out = await ask( `bytes=-${ length }`, { suffix: length } );
+				let out;
+				try {
+
+					out = await ask( `bytes=-${ length }`, { suffix: length } );
+
+				} catch ( error ) {
+
+					// No response at all: across origins, a suffix range is not a
+					// CORS-safelisted Range, so it costs a preflight, which static
+					// hosts (GitHub Pages, raw.githubusercontent.com) refuse. Then the
+					// size from a HEAD (Content-Length is readable across origins) and
+					// the tail as a plain `bytes=a-b`, which needs no preflight.
+					if ( error === null || typeof error !== 'object' || 'status' in error ) throw error;
+					const total = await headSize();
+					if ( total === null ) throw error;
+					size = total;
+					const start = Math.max( 0, total - length );
+					out = await ask( `bytes=${ start }-${ total - 1 }`, { offset: start, length: total - start } );
+
+				}
+
 				if ( out ) {
 
 					if ( size === null ) throw new Error( `${ url }: the server did not say the file size` );
